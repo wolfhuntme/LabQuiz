@@ -3,10 +3,12 @@
 # docker-compose down & # docker-compose build then up
 services: #3 services
   nginxwebsvr: #name of service
-    image: nginx:alpine #image
+    image: php:8.1-apache #changed to PHP Apache image
     container_name: nginxwebsvr 
     ports:
       - "80:80" #8080:80 for port 8080, this is now # http://localhost:80
+    volumes:
+      - ./web:/var/www/html #mount web files
       
   mysqldb: #name of service
     image: mysql:8.0
