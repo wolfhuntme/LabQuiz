@@ -1,0 +1,38 @@
+# USAGE:
+# docker-compose up 
+# docker-compose down & # docker-compose build then up
+services: #3 services
+  nginxwebsvr: #name of service
+    image: nginx:alpine #image
+    container_name: nginxwebsvr 
+    ports:
+      - "80:80" #8080:80 for port 8080, this is now # http://localhost:80
+      
+  mysqldb: #name of service
+    image: mysql:8.0
+    restart: always
+    volumes:
+      - ./mysql_data:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: pass
+      MYSQL_DATABASE: testdb
+      MYSQL_USER: user
+      MYSQL_PASSWORD: pass
+
+  git-server:  #name of service
+    build:
+      dockerfile: gitserver.Dockerfile
+      context: .
+    restart: always
+    ports:
+      - "3000:3000" # http://localhost:3000
+    volumes:
+      - ./repos:/var/www/git
+
+# CD to the repos directory in a new cmd
+# make a folder for repository and cd into it
+# git clone http://localhost:3000/REPOSITORYNAMEHERE.git (FOLDER WILL APPEAR)
+# cd into it echo "Hello from git server!" > test.txt
+# git add test.txt
+# git commit -m "First commit to local git server"
+# git push origin master

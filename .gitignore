@@ -1,0 +1,18 @@
+# Ignore MySQL data directory
+mysql_data/
+
+# Ignore repos directory (Git repositories)
+repos/
+
+# Ignore Docker volumes and logs
+*.log
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Ignore IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
