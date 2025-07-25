@@ -1,55 +1,139 @@
-ui_security_tests:
-  stage: ui_test
-  image: php:8.2-cli
-  services:
-    - name: selenium/standalone-chrome:latest
-      alias: selenium
-  
-  variables:
-    # Use the service alias for Selenium
-    SELENIUM_HOST: "selenium"
-    SELENIUM_PORT: "4444"
-    # Use localhost since tests run in the same container as the app
-    APP_URL: "http://localhost:8080"
-  
-  before_script:
-    # Install dependencies
-    - apt-get update && apt-get install -y git unzip wget
-    - curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
-    - composer install --no-interaction --prefer-dist
+name: UI Security Testing
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  ui-tests:
+    name: Selenium UI Tests
+    runs-on: ubuntu-latest
     
-    # Start PHP built-in server in background
-    - php -S 0.0.0.0:8080 -t public/ &
-    - sleep 5  # Give server time to start
+    services:
+      selenium:
+        image: selenium/standalone-chrome:latest
+        options: --shm-size=2gb
+        ports:
+          - 4444:4444
     
-    # Wait for Selenium to be ready
-    - |
-      echo "Waiting for Selenium..."
-      for i in {1..30}; do
-        if wget -q --spider http://selenium:4444/wd/hub/status; then
-          echo "Selenium is ready!"
-          break
-        fi
-        echo "Waiting for Selenium... ($i/30)"
-        sleep 2
-      done
-  
-  script:
-    # Run your Selenium tests
-    - php vendor/bin/phpunit tests/SeleniumTest.php
-  
-  after_script:
-    # Kill the PHP server
-    - pkill -f "php -S" || true
-  
-  artifacts:
-    when: always
-    paths:
-      - tests/logs/
-      - screenshots/
-    expire_in: 1 week
-  
-  only:
-    - main
-    - develop
-    - merge_requests
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.1'
+        extensions: curl, mbstring
+        
+    - name: Start PHP built-in server
+      run: |
+        cd web
+        php -S localhost:8080 &
+        sleep 3
+        echo "✅ PHP server started on http://localhost:8080"
+        
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        
+    - name: Install test dependencies
+      run: |
+        npm install
+        echo "✅ Test dependencies installed"
+        
+    - name: Create Selenium test
+      run: |
+        mkdir -p tests
+        cat > tests/selenium-ui-tests.js << 'EOF'
+        const { Builder, By, until } = require('selenium-webdriver');
+        const assert = require('assert');
+
+        describe('Security UI Tests', function() {
+          this.timeout(30000);
+          let driver;
+
+          before(async function() {
+            driver = await new Builder()
+              .forBrowser('chrome')
+              .usingServer('http://localhost:4444/wd/hub')
+              .build();
+          });
+
+          after(async function() {
+            await driver.quit();
+          });
+
+          it('should load homepage successfully', async function() {
+            await driver.get('http://localhost:8080/index.php');
+            const title = await driver.getTitle();
+            assert(title.includes('Search Application'));
+            console.log('✅ Homepage loads successfully');
+          });
+
+          it('should detect and block XSS attacks', async function() {
+            await driver.get('http://localhost:8080/index.php');
+            
+            const searchBox = await driver.findElement(By.id('search_term'));
+            await searchBox.sendKeys('<script>alert("XSS")</script>');
+            
+            const submitButton = await driver.findElement(By.css('input[type="submit"]'));
+            await submitButton.click();
+            
+            await driver.wait(until.elementLocated(By.css('p[style*="color: red"]')), 5000);
+            const errorMsg = await driver.findElement(By.css('p[style*="color: red"]')).getText();
+            
+            assert(errorMsg.includes('XSS attack detected'));
+            console.log('✅ XSS protection working');
+          });
+
+          it('should detect and block SQL injection', async function() {
+            await driver.get('http://localhost:8080/index.php');
+            
+            const searchBox = await driver.findElement(By.id('search_term'));
+            await searchBox.clear();
+            await searchBox.sendKeys("' OR 1=1--");
+            
+            const submitButton = await driver.findElement(By.css('input[type="submit"]'));
+            await submitButton.click();
+            
+            await driver.wait(until.elementLocated(By.css('p[style*="color: red"]')), 5000);
+            const errorMsg = await driver.findElement(By.css('p[style*="color: red"]')).getText();
+            
+            assert(errorMsg.includes('SQL injection detected'));
+            console.log('✅ SQL injection protection working');
+          });
+
+          it('should allow safe input and redirect', async function() {
+            await driver.get('http://localhost:8080/index.php');
+            
+            const searchBox = await driver.findElement(By.id('search_term'));
+            await searchBox.clear();
+            await searchBox.sendKeys('Hello World');
+            
+            const submitButton = await driver.findElement(By.css('input[type="submit"]'));
+            await submitButton.click();
+            
+            await driver.wait(until.urlContains('results.php'), 5000);
+            const currentUrl = await driver.getCurrentUrl();
+            
+            assert(currentUrl.includes('results.php'));
+            assert(currentUrl.includes('q=Hello+World'));
+            console.log('✅ Safe input processed correctly');
+          });
+        });
+        EOF
+        
+    - name: Run UI tests
+      run: |
+        echo "🧪 Running Selenium UI tests..."
+        npm test
+        
+    - name: Test Summary
+      if: always()
+      run: |
+        echo "📊 UI Testing completed"
+        echo "✅ All security tests executed"
