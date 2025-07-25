@@ -1,0 +1,79 @@
+name: ESLint Security Analysis
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  eslint-security:
+    name: Run ESLint Security Scan
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      security-events: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: |
+        npm install
+        npm install eslint --save-dev
+        npm install @microsoft/eslint-formatter-sarif --save-dev
+        npm install eslint-plugin-security --save-dev
+        npm install eslint-plugin-security-node --save-dev
+        npm install eslint-plugin-no-unsanitized --save-dev
+        
+    - name: Create reports directory
+      run: mkdir -p reports
+      
+    - name: Run ESLint with security plugins
+      run: |
+        npx eslint . \
+          --format @microsoft/eslint-formatter-sarif \
+          --output-file reports/eslint-results.sarif \
+          || true
+          
+    - name: Upload SARIF file
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: reports/eslint-results.sarif
+        category: eslint
+        
+    - name: Upload ESLint report as artifact
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: eslint-security-report
+        path: reports/eslint-results.sarif
+        retention-days: 5
+        
+    - name: Display ESLint summary
+      if: always()
+      run: |
+        echo "📊 ESLint Security Scan Summary:"
+        if [ -f reports/eslint-results.sarif ]; then
+          echo "✅ SARIF report generated successfully"
+          echo "📍 Check the Security tab for detailed results"
+          
+          # Count issues (basic parsing of SARIF)
+          ISSUE_COUNT=$(grep -o '"ruleId"' reports/eslint-results.sarif | wc -l || echo "0")
+          echo "⚠️ Total issues found: $ISSUE_COUNT"
+          
+          # Show security-specific issues
+          echo -e "\n🔒 Security Issues:"
+          grep -E '"ruleId":\s*"security/' reports/eslint-results.sarif | head -10 || echo "No security-specific issues found"
+        else
+          echo "❌ No SARIF report generated"
+        fi
