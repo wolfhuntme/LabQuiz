@@ -1,0 +1,119 @@
+name: 3. UI Testing with Selenium
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  ui-testing:
+    name: UI Testing with Selenium
+    runs-on: ubuntu-latest
+    
+    services:
+      selenium:
+        image: selenium/standalone-chrome:latest
+        ports:
+          - 4444:4444
+        options: --shm-size=2gb
+          
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Start PHP application
+      run: |
+        # Start PHP built-in server for testing
+        cd web
+        php -S localhost:8080 &
+        sleep 5
+        
+    - name: Test PHP application is running
+      run: |
+        curl -f http://localhost:8080 || (echo "PHP server failed to start" && exit 1)
+        echo "✅ PHP application is running"
+        
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        
+    - name: Install Selenium WebDriver
+      run: |
+        npm init -y
+        npm install selenium-webdriver mocha
+        
+    - name: Create simple Selenium test
+      run: |
+        mkdir -p tests
+        cat > tests/ui-test.js << 'EOF'
+        const { Builder, By, until } = require('selenium-webdriver');
+        const assert = require('assert');
+
+        describe('UI Security Tests', function() {
+            this.timeout(30000);
+            let driver;
+
+            before(async function() {
+                driver = await new Builder()
+                    .forBrowser('chrome')
+                    .usingServer('http://localhost:4444/wd/hub')
+                    .build();
+            });
+
+            after(async function() {
+                if (driver) {
+                    await driver.quit();
+                }
+            });
+
+            it('should load homepage', async function() {
+                await driver.get('http://localhost:8080');
+                const title = await driver.getTitle();
+                assert.strictEqual(title, 'Search Application');
+                console.log('✅ Homepage loads correctly');
+            });
+
+            it('should detect XSS', async function() {
+                await driver.get('http://localhost:8080');
+                
+                const input = await driver.findElement(By.name('search_term'));
+                await input.sendKeys('<script>alert("xss")</script>');
+                
+                const submit = await driver.findElement(By.css('input[type="submit"]'));
+                await submit.click();
+                
+                const errorMsg = await driver.findElement(By.css('p')).getText();
+                assert(errorMsg.includes('XSS attack detected'));
+                console.log('✅ XSS protection working');
+            });
+
+            it('should detect SQL injection', async function() {
+                await driver.get('http://localhost:8080');
+                
+                const input = await driver.findElement(By.name('search_term'));
+                await input.clear();
+                await input.sendKeys("' OR 1=1--");
+                
+                const submit = await driver.findElement(By.css('input[type="submit"]'));
+                await submit.click();
+                
+                const errorMsg = await driver.findElement(By.css('p')).getText();
+                assert(errorMsg.includes('SQL injection detected'));
+                console.log('✅ SQL injection protection working');
+            });
+        });
+        EOF
+        
+    - name: Run Selenium tests
+      run: |
+        npx mocha tests/ui-test.js
+        echo "✅ UI testing completed successfully"
+        
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: ui-test-results
+        path: tests/
