@@ -67,7 +67,9 @@ if ($_POST && isset($_POST['search_term'])) {
 ?>
 
 <!DOCTYPE html>
-<html>
+-<html>
++<html lang="en" xml:lang="en">
+
 <head>
     <title>Search Application</title>
 </head>

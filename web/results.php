@@ -5,7 +5,9 @@ $search_term = isset($_GET['q']) ? $_GET['q'] : '';
 ?>
 
 <!DOCTYPE html>
-<html>
+-<html>
++<html lang="en" xml:lang="en">
+
 <head>
     <title>Search Results</title>
 </head>
@@ -21,3 +23,4 @@ $search_term = isset($_GET['q']) ? $_GET['q'] : '';
     <a href="index.php">Back to Search</a>
 </body>
 </html>
+
