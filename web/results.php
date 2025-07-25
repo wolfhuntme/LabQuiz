@@ -5,8 +5,7 @@ $search_term = isset($_GET['q']) ? $_GET['q'] : '';
 ?>
 
 <!DOCTYPE html>
--<html>
-+<html lang="en" xml:lang="en">
+<html lang="en" xml:lang="en">
 
 <head>
     <title>Search Results</title>
