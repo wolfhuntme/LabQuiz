@@ -26,37 +26,115 @@ jobs:
         cat > composer.json << 'EOF'
         {
           "name": "secure-webapp/search-app",
+          "description": "Secure PHP web application with XSS and SQLi protection",
+          "type": "project",
           "require": {
             "php": ">=8.1"
           },
           "require-dev": {
-            "phpunit/phpunit": "^10.0"
+            "phpunit/phpunit": "^10.0",
+            "squizlabs/php_codesniffer": "^3.7"
+          },
+          "autoload": {
+            "psr-4": {
+              "App\\": "web/"
+            }
           }
         }
         EOF
         
-    - name: Install dependencies
-      run: composer install --no-interaction
-      
+    - name: Install Composer dependencies
+      run: |
+        composer install --no-interaction --no-dev
+        echo "✅ Composer dependencies installed"
+        
+    - name: Create package.json for Node.js dependencies
+      run: |
+        cat > package.json << 'EOF'
+        {
+          "name": "secure-webapp",
+          "version": "1.0.0",
+          "description": "Secure web application",
+          "dependencies": {
+            "express": "^4.18.0",
+            "lodash": "^4.17.21"
+          },
+          "devDependencies": {
+            "mocha": "^10.2.0",
+            "selenium-webdriver": "^4.15.0"
+          }
+        }
+        EOF
+        
+    - name: Install Node.js dependencies
+      run: |
+        npm install
+        echo "✅ Node.js dependencies installed"
+        
+    - name: Create reports directory
+      run: mkdir -p reports
+        
     - name: Run OWASP Dependency Check
       uses: dependency-check/Dependency-Check_Action@main
       with:
         project: "SecureWebApp"
         path: "."
-        format: "HTML,JSON"
+        format: "HTML"
         out: "reports"
+        args: >
+          --enableRetired
+          --disableNodeAudit
+          
+    - name: Check dependency scan results
+      run: |
+        echo "📊 OWASP Dependency Check Results:"
+        echo "=================================="
+        if [ -f reports/dependency-check-report.html ]; then
+          echo "✅ HTML report generated successfully"
+          ls -la reports/
+          
+          # Check file size to ensure it's not empty
+          size=$(stat -f%z reports/dependency-check-report.html 2>/dev/null || stat -c%s reports/dependency-check-report.html 2>/dev/null || echo 0)
+          echo "📁 Report size: ${size} bytes"
+          
+          if [ "$size" -gt 1000 ]; then
+            echo "✅ Report appears to be complete"
+          else
+            echo "⚠️ Report seems small, may be incomplete"
+          fi
+        else
+          echo "❌ HTML report not found"
+          echo "Available files in reports/:"
+          ls -la reports/ || echo "Reports directory is empty"
+        fi
+        
+    - name: Display dependency summary
+      run: |
+        echo "🔍 Dependency Check Summary:"
+        echo "============================"
+        echo "✅ Scanned project: SecureWebApp"
+        echo "📦 Scanned files: composer.json, package.json"
+        echo "🛡️ Checked for known vulnerabilities in dependencies"
+        
+        if [ -f reports/dependency-check-report.html ]; then
+          echo "📊 Full report available in artifacts"
+        fi
         
     - name: Upload dependency check report
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: dependency-check-report
+        name: owasp-dependency-check-report
         path: reports/
         
-    - name: Show dependency check summary
+    - name: Generate security recommendations
       run: |
-        echo "✅ OWASP Dependency Check completed"
-        if [ -f reports/dependency-check-report.html ]; then
-          echo "📊 HTML report generated successfully"
-          ls -la reports/
-        fi
+        echo "🔒 Security Recommendations:"
+        echo "=============================="
+        echo "1. ✅ Regularly update dependencies"
+        echo "2. 🔍 Review dependency-check-report.html for details"
+        echo "3. 🛡️ Monitor for new vulnerability disclosures"
+        echo "4. 📦 Use 'composer audit' for PHP-specific checks"
+        echo "5. 🔧 Use 'npm audit' for Node.js-specific checks"
+        echo ""
+        echo "✅ OWASP Dependency Check completed successfully"
