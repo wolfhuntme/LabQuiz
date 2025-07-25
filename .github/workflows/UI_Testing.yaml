@@ -1,224 +1,55 @@
-name: 3. UI Testing with Selenium
-
-on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
-
-jobs:
-  ui-testing:
-    name: UI Testing with Selenium
-    runs-on: ubuntu-latest
+ui_security_tests:
+  stage: ui_test
+  image: php:8.2-cli
+  services:
+    - name: selenium/standalone-chrome:latest
+      alias: selenium
+  
+  variables:
+    # Use the service alias for Selenium
+    SELENIUM_HOST: "selenium"
+    SELENIUM_PORT: "4444"
+    # Use localhost since tests run in the same container as the app
+    APP_URL: "http://localhost:8080"
+  
+  before_script:
+    # Install dependencies
+    - apt-get update && apt-get install -y git unzip wget
+    - curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+    - composer install --no-interaction --prefer-dist
     
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    # Start PHP application in Docker to make it accessible to Selenium
-    - name: Start PHP application with Docker
-      run: |
-        # Create a simple Dockerfile for PHP
-        cat > Dockerfile << 'EOF'
-        FROM php:8.1-apache
-        COPY web/ /var/www/html/
-        EXPOSE 80
-        EOF
-        
-        # Build and run PHP container
-        docker build -t php-app .
-        docker run -d -p 8080:80 --name php-app php-app
-        sleep 10
-        
-    - name: Start Selenium container
-      run: |
-        # Start Selenium with network access to PHP app
-        docker run -d -p 4444:4444 --name selenium --shm-size=2gb selenium/standalone-chrome:latest
-        sleep 15
-        
-    - name: Test application accessibility
-      run: |
-        # Test if PHP app is accessible
-        curl -f http://localhost:8080 || (echo "PHP app not accessible" && exit 1)
-        echo "✅ PHP application is accessible"
-        
-        # Test if Selenium is ready
-        curl -f http://localhost:4444/wd/hub/status || (echo "Selenium not ready" && exit 1)
-        echo "✅ Selenium Grid is ready"
-        
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
-        
-    - name: Install Selenium WebDriver
-      run: |
-        npm init -y
-        npm install selenium-webdriver mocha
-        
-    - name: Create simplified Selenium test
-      run: |
-        mkdir -p tests
-        cat > tests/ui-test.js << 'EOF'
-        const { Builder, By, until } = require('selenium-webdriver');
-        const assert = require('assert');
-
-        describe('UI Security Tests', function() {
-            this.timeout(60000);
-            let driver;
-
-            before(async function() {
-                console.log('Setting up Chrome driver...');
-                driver = await new Builder()
-                    .forBrowser('chrome')
-                    .usingServer('http://localhost:4444/wd/hub')
-                    .build();
-                console.log('✅ Chrome driver ready');
-            });
-
-            after(async function() {
-                if (driver) {
-                    await driver.quit();
-                    console.log('✅ Driver closed');
-                }
-            });
-
-            it('should load homepage successfully', async function() {
-                console.log('Testing homepage load...');
-                await driver.get('http://host.docker.internal:8080');
-                
-                // Wait for page to load
-                await driver.wait(until.titleIs('Search Application'), 10000);
-                
-                const title = await driver.getTitle();
-                assert.strictEqual(title, 'Search Application');
-                
-                // Check for form elements
-                const searchInput = await driver.findElement(By.name('search_term'));
-                assert(await searchInput.isDisplayed());
-                
-                const submitButton = await driver.findElement(By.css('input[type="submit"]'));
-                assert(await submitButton.isDisplayed());
-                
-                console.log('✅ Homepage loads correctly');
-            });
-
-            it('should detect and block XSS attacks', async function() {
-                console.log('Testing XSS protection...');
-                await driver.get('http://host.docker.internal:8080');
-                
-                const input = await driver.findElement(By.name('search_term'));
-                await input.clear();
-                await input.sendKeys('<script>alert("xss")</script>');
-                
-                const submit = await driver.findElement(By.css('input[type="submit"]'));
-                await submit.click();
-                
-                // Wait for response
-                await driver.sleep(2000);
-                
-                // Should stay on same page with error
-                const currentTitle = await driver.getTitle();
-                assert.strictEqual(currentTitle, 'Search Application');
-                
-                // Check for error message
-                const errorElements = await driver.findElements(By.css('p'));
-                let foundError = false;
-                for (let element of errorElements) {
-                    const text = await element.getText();
-                    if (text.includes('XSS attack detected')) {
-                        foundError = true;
-                        break;
-                    }
-                }
-                assert(foundError, 'XSS error message not found');
-                
-                console.log('✅ XSS protection working');
-            });
-
-            it('should detect and block SQL injection', async function() {
-                console.log('Testing SQL injection protection...');
-                await driver.get('http://host.docker.internal:8080');
-                
-                const input = await driver.findElement(By.name('search_term'));
-                await input.clear();
-                await input.sendKeys("' OR 1=1--");
-                
-                const submit = await driver.findElement(By.css('input[type="submit"]'));
-                await submit.click();
-                
-                // Wait for response
-                await driver.sleep(2000);
-                
-                // Should stay on same page with error
-                const currentTitle = await driver.getTitle();
-                assert.strictEqual(currentTitle, 'Search Application');
-                
-                // Check for error message
-                const errorElements = await driver.findElements(By.css('p'));
-                let foundError = false;
-                for (let element of errorElements) {
-                    const text = await element.getText();
-                    if (text.includes('SQL injection detected')) {
-                        foundError = true;
-                        break;
-                    }
-                }
-                assert(foundError, 'SQL injection error message not found');
-                
-                console.log('✅ SQL injection protection working');
-            });
-
-            it('should allow safe input and redirect', async function() {
-                console.log('Testing safe input handling...');
-                await driver.get('http://host.docker.internal:8080');
-                
-                const input = await driver.findElement(By.name('search_term'));
-                await input.clear();
-                await input.sendKeys('safe search term');
-                
-                const submit = await driver.findElement(By.css('input[type="submit"]'));
-                await submit.click();
-                
-                // Wait for redirect to results page
-                await driver.wait(until.titleIs('Search Results'), 10000);
-                
-                const title = await driver.getTitle();
-                assert.strictEqual(title, 'Search Results');
-                
-                // Check result content
-                const resultElement = await driver.findElement(By.css('strong'));
-                const resultText = await resultElement.getText();
-                assert.strictEqual(resultText, 'safe search term');
-                
-                console.log('✅ Safe input handling working');
-            });
-        });
-        EOF
-        
-    - name: Run Selenium tests
-      run: |
-        echo "🧪 Starting Selenium UI tests..."
-        npx mocha tests/ui-test.js --reporter spec
-        echo "✅ UI testing completed successfully"
-        
-    - name: Show container logs if tests fail
-      if: failure()
-      run: |
-        echo "📋 PHP Application logs:"
-        docker logs php-app || true
-        echo "📋 Selenium logs:"
-        docker logs selenium || true
-        
-    - name: Cleanup containers
-      if: always()
-      run: |
-        docker stop php-app selenium || true
-        docker rm php-app selenium || true
-        
-    - name: Upload test results
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: ui-test-results
-        path: tests/
+    # Start PHP built-in server in background
+    - php -S 0.0.0.0:8080 -t public/ &
+    - sleep 5  # Give server time to start
+    
+    # Wait for Selenium to be ready
+    - |
+      echo "Waiting for Selenium..."
+      for i in {1..30}; do
+        if wget -q --spider http://selenium:4444/wd/hub/status; then
+          echo "Selenium is ready!"
+          break
+        fi
+        echo "Waiting for Selenium... ($i/30)"
+        sleep 2
+      done
+  
+  script:
+    # Run your Selenium tests
+    - php vendor/bin/phpunit tests/SeleniumTest.php
+  
+  after_script:
+    # Kill the PHP server
+    - pkill -f "php -S" || true
+  
+  artifacts:
+    when: always
+    paths:
+      - tests/logs/
+      - screenshots/
+    expire_in: 1 week
+  
+  only:
+    - main
+    - develop
+    - merge_requests
