@@ -10,58 +10,84 @@ jobs:
   dependency-check:
     name: Check PHP Dependencies
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: write        # needed for git push
+      pull-requests: write   # if you want it to open a PR
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up PHP
-      uses: shivammathur/setup-php@v2
-      with:
-        php-version: '8.1'
-        
-    - name: Create minimal composer.json
-      run: |
-        cat > composer.json << 'EOF'
-        {
-          "name": "secure-webapp/search-app",
-          "description": "Simple search application",
-          "require": {
-            "php": ">=8.1"
-          },
-          "require-dev": {
-            "roave/security-advisories": "dev-latest"
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0      # so we can push back
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+
+      - name: Create minimal composer.json
+        run: |
+          cat > composer.json << 'EOF'
+          {
+            "name": "secure-webapp/search-app",
+            "description": "Simple search application",
+            "require": {
+              "php": ">=8.1"
+            },
+            "require-dev": {
+              "roave/security-advisories": "dev-latest"
+            }
           }
-        }
-        EOF
-        
-    - name: Install Composer
-      run: |
-        curl -sS https://getcomposer.org/installer | php
-        mv composer.phar /usr/local/bin/composer
-        
-    - name: Check for security vulnerabilities
-      run: |
-        echo "🔍 Checking for known security vulnerabilities..."
-        composer install --no-scripts --no-progress 2>&1 | tee install.log || true
-        
-        if grep -q "conflicts" install.log || grep -q "roave/security-advisories" install.log; then
-          echo "⚠️ Security vulnerabilities found!"
-          echo "Please review the warnings above for details."
-        else
-          echo "✅ No known security vulnerabilities found"
-        fi
-        
-    - name: Check PHP version compatibility
-      run: |
-        echo "🔍 Checking PHP compatibility..."
-        php -v
-        php -m | grep -E "(mysqli|pdo)" || echo "⚠️ Database extensions not found"
-        
-    - name: Summary
-      if: always()
-      run: |
-        echo "📊 Dependency Check Summary:"
-        echo "- PHP Version: $(php -v | head -n 1)"
-        echo "- Composer Version: $(composer --version)"
-        echo "✅ Dependency check completed"
+          EOF
+
+      - name: Install Composer
+        run: |
+          curl -sS https://getcomposer.org/installer | php
+          mv composer.phar /usr/local/bin/composer
+
+      - name: Check for security vulnerabilities
+        id: security
+        run: |
+          echo "🔍 Checking for known security vulnerabilities..."
+          composer install --no-scripts --no-progress 2>&1 \
+            | tee install.log || true
+          if grep -q "conflicts" install.log \
+             || grep -q "roave/security-advisories" install.log; then
+            echo "::set-output name=vulnerable::true"
+          else
+            echo "::set-output name=vulnerable::false"
+          fi
+
+      - name: Auto‑fix vulnerable deps
+        if: steps.security.outputs.vulnerable == 'true'
+        run: |
+          echo "⚙️  Running composer update to lift vulnerability..."
+          composer update --with-all-dependencies --no-interaction
+
+      - name: Commit and push fixes
+        if: steps.security.outputs.vulnerable == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          commit_message: "chore(deps): auto‑update to fix security vulnerability"
+          file_pattern: |
+            composer.json
+            composer.lock
+
+      - name: Check PHP version compatibility
+        run: |
+          echo "🔍 Checking PHP compatibility..."
+          php -v
+          php -m | grep -E "(mysqli|pdo)" \
+            || echo "⚠️ Database extensions not found"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "📊 Dependency Check Summary:"
+          echo "- PHP Version: $(php -v | head -n 1)"
+          echo "- Composer Version: $(composer --version)"
+          if [[ "${{ steps.security.outputs.vulnerable }}" == "true" ]]; then
+            echo "✅ Vulnerability auto‑fixed and changes pushed"
+          else
+            echo "✅ No known security vulnerabilities found"
+          fi
