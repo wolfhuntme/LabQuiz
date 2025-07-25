@@ -7,12 +7,25 @@ repos/
 # Ignore Docker volumes and logs
 *.log
 
-# Ignore OS files
+# OS files
 .DS_Store
 Thumbs.db
 
-# Ignore IDE files
+# IDE files
 .vscode/
 .idea/
 *.swp
-*.swo"web/" 
+*.swo
+
+# Testing and CI artifacts
+node_modules/
+test-results/
+test-results.json
+reports/
+composer.lock
+vendor/
+.phpunit.result.cache
+
+# OWASP Dependency Check
+dependency-check-report.*
+suppression.xml

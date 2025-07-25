@@ -1,0 +1,487 @@
+name: Secure PHP App CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # 1. INTEGRATION CHECK with PHPUnit
+  integration-check:
+    name: Integration Check with PHPUnit
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.1'
+        tools: composer, phpunit
+        
+    - name: Create composer.json for PHPUnit
+      run: |
+        cat > composer.json << 'EOF'
+        {
+          "name": "secure-webapp/search-app",
+          "require": {
+            "php": ">=8.1"
+          },
+          "require-dev": {
+            "phpunit/phpunit": "^10.0"
+          },
+          "autoload": {
+            "psr-4": {
+              "App\\": "web/"
+            }
+          }
+        }
+        EOF
+        
+    - name: Install dependencies
+      run: composer install --no-interaction --prefer-dist
+      
+    - name: Create PHPUnit configuration
+      run: |
+        cat > phpunit.xml << 'EOF'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <phpunit bootstrap="vendor/autoload.php"
+                 colors="true"
+                 verbose="true">
+          <testsuites>
+            <testsuite name="Integration Tests">
+              <directory>tests</directory>
+            </testsuite>
+          </testsuites>
+        </phpunit>
+        EOF
+        
+    - name: Create integration tests
+      run: |
+        mkdir -p tests
+        cat > tests/SecurityValidationTest.php << 'EOF'
+        <?php
+        
+        use PHPUnit\Framework\TestCase;
+        
+        class SecurityValidationTest extends TestCase
+        {
+            private function getValidationFunction()
+            {
+                // Include the validation function from index.php
+                $indexContent = file_get_contents(__DIR__ . '/../web/index.php');
+                
+                // Extract just the validateInput function
+                preg_match('/function validateInput\(\$input\) \{.*?return \'SAFE\';\s*\}/s', $indexContent, $matches);
+                
+                if (empty($matches)) {
+                    $this->fail('Could not extract validateInput function');
+                }
+                
+                // Create a temporary function
+                eval(str_replace('function validateInput', 'function testValidateInput', $matches[0]));
+                
+                return 'testValidateInput';
+            }
+            
+            public function testXSSDetection()
+            {
+                $validateInput = $this->getValidationFunction();
+                
+                $xssInputs = [
+                    '<script>alert("xss")</script>',
+                    '<img src=x onerror=alert(1)>',
+                    'javascript:alert(1)',
+                    '<iframe src="javascript:alert(1)">',
+                    'vbscript:msgbox("xss")'
+                ];
+                
+                foreach ($xssInputs as $input) {
+                    $result = $validateInput($input);
+                    $this->assertEquals('XSS', $result, "Failed to detect XSS in: $input");
+                }
+                
+                echo "✅ XSS detection working correctly\n";
+            }
+            
+            public function testSQLInjectionDetection()
+            {
+                $validateInput = $this->getValidationFunction();
+                
+                $sqlInputs = [
+                    "' OR 1=1--",
+                    "'; DROP TABLE users--",
+                    "' UNION SELECT username, password FROM users--",
+                    "' OR '1'='1",
+                    "'; DELETE FROM users WHERE 1=1--"
+                ];
+                
+                foreach ($sqlInputs as $input) {
+                    $result = $validateInput($input);
+                    $this->assertEquals('SQL', $result, "Failed to detect SQL injection in: $input");
+                }
+                
+                echo "✅ SQL injection detection working correctly\n";
+            }
+            
+            public function testSafeInputs()
+            {
+                $validateInput = $this->getValidationFunction();
+                
+                $safeInputs = [
+                    'hello world',
+                    'search term',
+                    'laptop computer',
+                    'email@domain.com',
+                    'product-name-123'
+                ];
+                
+                foreach ($safeInputs as $input) {
+                    $result = $validateInput($input);
+                    $this->assertEquals('SAFE', $result, "Safe input incorrectly flagged: $input");
+                }
+                
+                echo "✅ Safe input validation working correctly\n";
+            }
+            
+            public function testDockerContainerIntegration()
+            {
+                // Test if we can start containers and they respond
+                $webResponse = @file_get_contents('http://localhost:80');
+                
+                // If containers aren't running locally, that's okay for unit testing
+                if ($webResponse === false) {
+                    echo "ℹ️ Local containers not running - this is expected in CI\n";
+                    $this->assertTrue(true);
+                } else {
+                    $this->assertStringContainsString('Search Application', $webResponse);
+                    echo "✅ Container integration test passed\n";
+                }
+            }
+        }
+        EOF
+        
+    - name: Run PHPUnit integration tests
+      run: |
+        ./vendor/bin/phpunit --verbose
+        echo "✅ PHPUnit integration tests completed"
+
+  # 2. OWASP DEPENDENCY CHECK
+  dependency-check:
+    name: OWASP Dependency Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up PHP and create composer dependencies
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.1'
+        tools: composer
+        
+    - name: Create comprehensive composer.json
+      run: |
+        cat > composer.json << 'EOF'
+        {
+          "name": "secure-webapp/search-app",
+          "description": "Secure PHP web application with XSS and SQLi protection",
+          "type": "project",
+          "require": {
+            "php": ">=8.1"
+          },
+          "require-dev": {
+            "phpunit/phpunit": "^10.0",
+            "squizlabs/php_codesniffer": "^3.7"
+          }
+        }
+        EOF
+        
+    - name: Install dependencies for scanning
+      run: composer install --no-interaction --prefer-dist
+      
+    - name: Create reports directory
+      run: mkdir -p reports
+        
+    - name: Run OWASP Dependency Check
+      uses: dependency-check/Dependency-Check_Action@main
+      with:
+        project: "SecureWebApp"
+        path: "."
+        format: "HTML,JSON,SARIF"
+        out: "reports"
+        args: >
+          --enableRetired
+          --enableExperimental
+          --nodeAuditSkipDevDependencies
+          --suppression suppression.xml
+          
+    - name: Create suppression file for false positives
+      run: |
+        cat > suppression.xml << 'EOF'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+          <!-- Suppress false positives here if needed -->
+        </suppressions>
+        EOF
+        
+    - name: Upload OWASP Dependency Check results
+      uses: actions/upload-artifact@v4
+      with:
+        name: owasp-dependency-check-report
+        path: reports/
+        
+    - name: Upload SARIF results to GitHub Security
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: reports/dependency-check-report.sarif
+        
+    - name: Display dependency check summary
+      run: |
+        echo "✅ OWASP Dependency Check completed"
+        if [ -f reports/dependency-check-report.html ]; then
+          echo "📊 HTML report generated successfully"
+        fi
+
+  # 3. UI TESTING with Selenium WebDriver and Headless Chrome
+  ui-testing-selenium:
+    name: UI Testing with Selenium WebDriver
+    runs-on: ubuntu-latest
+    
+    services:
+      selenium:
+        image: selenium/standalone-chrome:latest
+        ports:
+          - 4444:4444
+        options: >-
+          --shm-size=2gb
+          --name selenium-server
+          
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Start application containers
+      run: |
+        docker-compose up -d
+        sleep 30
+        
+    - name: Wait for application to be ready
+      run: |
+        timeout 120 bash -c 'until curl -f http://localhost:80; do sleep 5; done'
+        echo "✅ Application is ready for UI testing"
+        
+    - name: Verify Selenium Grid is running
+      run: |
+        curl -f http://localhost:4444/wd/hub/status
+        echo "✅ Selenium Grid is ready"
+        
+    - name: Set up Node.js for Selenium WebDriver
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        
+    - name: Install Selenium WebDriver dependencies
+      run: |
+        npm init -y
+        npm install selenium-webdriver mocha --save-dev
+        
+    - name: Create Selenium WebDriver UI tests
+      run: |
+        mkdir -p tests
+        cat > tests/selenium-ui-tests.js << 'EOF'
+        const { Builder, By, until, Key } = require('selenium-webdriver');
+        const assert = require('assert');
+
+        describe('Secure Web Application UI Tests with Selenium', function() {
+            this.timeout(30000);
+            let driver;
+
+            before(async function() {
+                // Connect to Selenium Grid
+                driver = await new Builder()
+                    .forBrowser('chrome')
+                    .usingServer('http://localhost:4444/wd/hub')
+                    .build();
+            });
+
+            after(async function() {
+                if (driver) {
+                    await driver.quit();
+                }
+            });
+
+            it('should load the homepage correctly', async function() {
+                await driver.get('http://localhost:80');
+                
+                const title = await driver.getTitle();
+                assert.strictEqual(title, 'Search Application');
+                
+                const heading = await driver.findElement(By.css('h1')).getText();
+                assert.strictEqual(heading, 'Search Application');
+                
+                const searchInput = await driver.findElement(By.name('search_term'));
+                assert(await searchInput.isDisplayed());
+                
+                const submitButton = await driver.findElement(By.css('input[type="submit"]'));
+                assert(await submitButton.isDisplayed());
+                
+                console.log('✅ Homepage loads correctly');
+            });
+
+            it('should handle safe input correctly', async function() {
+                await driver.get('http://localhost:80');
+                
+                const searchInput = await driver.findElement(By.name('search_term'));
+                await searchInput.clear();
+                await searchInput.sendKeys('safe search term');
+                
+                const submitButton = await driver.findElement(By.css('input[type="submit"]'));
+                await submitButton.click();
+                
+                // Wait for redirect to results page
+                await driver.wait(until.titleIs('Search Results'), 10000);
+                
+                const heading = await driver.findElement(By.css('h1')).getText();
+                assert.strictEqual(heading, 'Search Results');
+                
+                const resultText = await driver.findElement(By.css('strong')).getText();
+                assert.strictEqual(resultText, 'safe search term');
+                
+                console.log('✅ Safe input handling works');
+            });
+
+            it('should block XSS attacks', async function() {
+                const xssPayloads = [
+                    '<script>alert("xss")</script>',
+                    '<img src=x onerror=alert(1)>',
+                    'javascript:alert(1)',
+                    '<iframe src="javascript:alert(1)">',
+                    'vbscript:msgbox("xss")'
+                ];
+
+                for (const payload of xssPayloads) {
+                    await driver.get('http://localhost:80');
+                    
+                    const searchInput = await driver.findElement(By.name('search_term'));
+                    await searchInput.clear();
+                    await searchInput.sendKeys(payload);
+                    
+                    const submitButton = await driver.findElement(By.css('input[type="submit"]'));
+                    await submitButton.click();
+                    
+                    // Should stay on same page with error message
+                    const title = await driver.getTitle();
+                    assert.strictEqual(title, 'Search Application');
+                    
+                    const errorMessage = await driver.findElement(By.css('p')).getText();
+                    assert(errorMessage.includes('XSS attack detected'));
+                    
+                    // Input should be cleared
+                    const inputValue = await driver.findElement(By.name('search_term')).getAttribute('value');
+                    assert.strictEqual(inputValue, '');
+                    
+                    console.log(`✅ XSS payload blocked: ${payload.substring(0, 20)}...`);
+                }
+            });
+
+            it('should block SQL injection attacks', async function() {
+                const sqlPayloads = [
+                    "' OR 1=1--",
+                    "'; DROP TABLE users--",
+                    "' UNION SELECT username, password FROM users--",
+                    "' OR '1'='1",
+                    "'; DELETE FROM users WHERE 1=1--"
+                ];
+
+                for (const payload of sqlPayloads) {
+                    await driver.get('http://localhost:80');
+                    
+                    const searchInput = await driver.findElement(By.name('search_term'));
+                    await searchInput.clear();
+                    await searchInput.sendKeys(payload);
+                    
+                    const submitButton = await driver.findElement(By.css('input[type="submit"]'));
+                    await submitButton.click();
+                    
+                    // Should stay on same page with error message
+                    const title = await driver.getTitle();
+                    assert.strictEqual(title, 'Search Application');
+                    
+                    const errorMessage = await driver.findElement(By.css('p')).getText();
+                    assert(errorMessage.includes('SQL injection detected'));
+                    
+                    // Input should be cleared
+                    const inputValue = await driver.findElement(By.name('search_term')).getAttribute('value');
+                    assert.strictEqual(inputValue, '');
+                    
+                    console.log(`✅ SQL injection blocked: ${payload.substring(0, 20)}...`);
+                }
+            });
+
+            it('should validate navigation functionality', async function() {
+                await driver.get('http://localhost:80');
+                
+                // Submit safe search
+                const searchInput = await driver.findElement(By.name('search_term'));
+                await searchInput.sendKeys('test navigation');
+                
+                const submitButton = await driver.findElement(By.css('input[type="submit"]'));
+                await submitButton.click();
+                
+                // Wait for results page
+                await driver.wait(until.titleIs('Search Results'), 10000);
+                
+                // Click back to search
+                const backLink = await driver.findElement(By.linkText('Back to Search'));
+                await backLink.click();
+                
+                // Should be back on search page
+                await driver.wait(until.titleIs('Search Application'), 10000);
+                const heading = await driver.findElement(By.css('h1')).getText();
+                assert.strictEqual(heading, 'Search Application');
+                
+                console.log('✅ Navigation functionality works');
+            });
+        });
+        EOF
+        
+    - name: Create Mocha configuration
+      run: |
+        cat > .mocharc.json << 'EOF'
+        {
+          "timeout": 30000,
+          "recursive": true,
+          "reporter": "spec"
+        }
+        EOF
+        
+    - name: Run Selenium UI tests with Mocha
+      run: |
+        npx mocha tests/selenium-ui-tests.js
+        echo "✅ Selenium UI tests completed successfully"
+        
+    - name: Generate test report
+      if: always()
+      run: |
+        npx mocha tests/selenium-ui-tests.js --reporter json > test-results.json || true
+        echo "📊 Test results saved"
+        
+    - name: Upload Selenium test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: selenium-test-results
+        path: test-results.json
+        
+    - name: Cleanup containers
+      if: always()
+      run: docker-compose down

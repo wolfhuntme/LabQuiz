@@ -1,0 +1,13 @@
+{
+  "name": "secure-php-webapp",
+  "version": "1.0.0",
+  "description": "Secure PHP web application with comprehensive testing",
+  "scripts": {
+    "test": "mocha tests/selenium-ui-tests.js",
+    "test:selenium": "mocha tests/selenium-ui-tests.js --timeout 30000"
+  },
+  "devDependencies": {
+    "selenium-webdriver": "^4.15.0",
+    "mocha": "^10.2.0"
+  }
+}
